@@ -1,9 +1,5 @@
 $ = require('jquery');
 
-// TODO: would be nicer to load hljs asynchronously, to show text as early as
-// possible
-hljs = require('highlight.js');
-
 var KeyCodes = {
   ESCAPE: 27,
   ENTER: 13,
@@ -14,10 +10,27 @@ function getSelectedText() {
   return window.getSelection ? window.getSelection().toString() : null;
 }
 
+// Get file info from the current URL. Returns an object with the following keys:
+// repoName: the repo name
+// pathInRepo: The page in the repo.
+function getFileInfo() {
+  // Disassemble the current URL.
+  var path = window.location.pathname.slice(6); // Strip "/view/" prefix
+  var repoName = path.split('/')[0];
+  var pathInRepo = path.slice(repoName.length + 1).replace(/^\/+/, '');
+
+  return {
+    repoName: repoName,
+    pathInRepo: pathInRepo,
+  }
+}
+
 function doSearch(event, query, newTab) {
+  var fileInfo = getFileInfo();
+
   var url;
   if (query !== undefined) {
-    url = '/search?q=' + encodeURIComponent(query);
+    url = '/search?q=' + encodeURIComponent(query) + '&repo=' + encodeURIComponent(fileInfo.repoName);
   } else {
     url = '/search';
   }
@@ -149,39 +162,53 @@ function init(initData) {
 
     // Update the external-browse link
     $('#external-link').attr('href', getExternalLink(range));
+    updateFragments(range, $('#permalink, #back-to-head'));
   }
 
-  function getExternalLink(range) {
+  function getLineNumber(range) {
     if (range == null) {
       // Default to first line if no lines are selected.
-      lno = 1;
+      return 1;
     } else if (range.start == range.end) {
-      lno = range.start;
+      return range.start;
     } else {
       // We blindly assume that the external viewer supports linking to a
       // range of lines. Github doesn't support this, but highlights the
       // first line given, which is close enough.
-      lno = range.start + "-" + range.end;
+      return range.start + "-" + range.end;
     }
+  }
 
-    // Disassemble the current URL
-    var path = window.location.pathname.slice(6); // Strip "/view/" prefix
-    var repoName = path.split('/')[0];
-    var pathInRepo = path.slice(repoName.length + 1);
+  function getExternalLink(range) {
+    var lno = getLineNumber(range);
+
+    var fileInfo = getFileInfo();
 
     url = initData.repo_info.metadata['url-pattern']
 
     // If {path} already has a slash in front of it, trim extra leading
     // slashes from `pathInRepo` to avoid a double-slash in the URL.
-    if (url.indexOf('/{path}') !== -1)
-      pathInRepo = pathInRepo.replace(/^\/+/, '');
+    if (url.indexOf('/{path}') !== -1) {
+      fileInfo.pathInRepo = fileInfo.pathInRepo.replace(/^\/+/, '');
+    }
 
     // XXX code copied
     url = url.replace('{lno}', lno);
     url = url.replace('{version}', initData.commit);
-    url = url.replace('{name}', repoName);
-    url = url.replace('{path}', pathInRepo);
+    url = url.replace('{name}', fileInfo.repoName);
+    url = url.replace('{path}', fileInfo.pathInRepo);
     return url;
+  }
+
+  function updateFragments(range, $anchors) {
+    $anchors.each(function() {
+      var $a = $(this);
+      var href = $a.attr('href').split('#')[0];
+      if (range !== null) {
+        href += '#L' + getLineNumber(range);
+      }
+      $a.attr('href', href);
+    });
   }
 
   function processKeyEvent(event) {
@@ -210,8 +237,20 @@ function init(initData) {
       // Visually highlight the external link to indicate what happened
       $('#external-link').focus();
       window.location = $('#external-link').attr('href');
+    } else if (String.fromCharCode(event.which) == 'Y') {
+      var $a = $('#permalink');
+      var permalink_is_present = $a.length > 0;
+      if (permalink_is_present) {
+        $a.focus();
+        window.location = $a.attr('href');
+      }
+    } else if (String.fromCharCode(event.which) == 'N' || String.fromCharCode(event.which) == 'P') {
+      var goBackwards = String.fromCharCode(event.which) === 'P';
+      var selectedText = getSelectedText();
+      if (selectedText) {
+        window.find(selectedText, false /* case sensitive */, goBackwards);
+      }
     }
-
     return true;
   }
 
@@ -240,6 +279,16 @@ function init(initData) {
     }
   }
 
+  var showSelectionReminder = function () {
+    $('.without-selection').hide();
+    $('.with-selection').show();
+  }
+
+  var hideSelectionReminder = function () {
+    $('.without-selection').show();
+    $('.with-selection').hide();
+  }
+
   function initializePage() {
     // Initial range detection for when the page is loaded
     handleHashChange();
@@ -263,8 +312,20 @@ function init(initData) {
 
     $(document).on('keydown', function(event) {
       // Filter out key events when the user has focused an input field.
-      if(!$(event.target).is('input,textarea')) {
-        processKeyEvent(event);
+      if($(event.target).is('input,textarea'))
+        return;
+      // Filter out key if a modifier is pressed.
+      if(event.altKey || event.ctrlKey || event.metaKey)
+        return;
+      processKeyEvent(event);
+    });
+
+    $(document).mouseup(function() {
+      var selectedText = getSelectedText();
+      if(selectedText) {
+        showSelectionReminder(selectedText);
+      } else {
+        hideSelectionReminder();
       }
     });
 
@@ -280,7 +341,6 @@ function init(initData) {
   setTimeout(function() {
     lineNumberContainer.css({display: 'block'});
     initializePage();
-    setTimeout(function() { hljs.highlightBlock($('#source-code')[0]); }, 0);
   }, 1);
 }
 

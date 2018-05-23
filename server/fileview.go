@@ -12,24 +12,31 @@ import (
 )
 
 // Mapping from known file extensions to filetype hinting.
+var filenameToLangMap map[string]string = map[string]string{
+	"BUILD": "python",
+}
 var extToLangMap map[string]string = map[string]string{
 	".AppleScript": "applescript",
+	".bzl":         "python",
 	".c":           "c",
 	".coffee":      "coffeescript",
 	".cpp":         "cpp",
 	".css":         "css",
 	".go":          "go",
 	".h":           "cpp",
-	".html":        "xml",
+	".html":        "markup",
 	".java":        "java",
 	".js":          "javascript",
 	".json":        "json",
+	".jsx":         "jsx",
 	".m":           "objectivec",
 	".markdown":    "markdown",
 	".md":          "markdown",
 	".php":         "php",
 	".pl":          "perl",
+	".proto":       "go",
 	".py":          "python",
+	".pyst":        "python",
 	".rb":          "ruby",
 	".rs":          "rust",
 	".scala":       "scala",
@@ -38,7 +45,8 @@ var extToLangMap map[string]string = map[string]string{
 	".sh":          "bash",
 	".sql":         "sql",
 	".swift":       "swift",
-	".xml":         "xml",
+	".tsx":         "tsx",
+	".xml":         "markup",
 	".yaml":        "yaml",
 	".yml":         "yaml",
 }
@@ -62,6 +70,8 @@ type fileViewerContext struct {
 	DirContent     *directoryContent
 	FileContent    *sourceFileContent
 	ExternalDomain string
+	Permalink      string
+	Headlink       string
 }
 
 type sourceFileContent struct {
@@ -89,6 +99,16 @@ func (s DirListingSort) Less(i, j int) bool {
 		return s[i].IsDir
 	}
 	return s[i].Name < s[j].Name
+}
+
+func gitCommitHash(ref string, repoPath string) (string, error) {
+	out, err := exec.Command(
+		"git", "-C", repoPath, "show", "--quiet", "--pretty=%H", ref,
+	).Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 func gitObjectType(obj string, repoPath string) (string, error) {
@@ -172,11 +192,16 @@ func buildDirectoryListEntry(treeEntry gitTreeEntry, pathFromRoot string, repo c
 }
 
 func buildFileData(relativePath string, repo config.RepoConfig, commit string) (*fileViewerContext, error) {
+	commitHash := commit
+	out, err := gitCommitHash(commit, repo.Path)
+	if err == nil {
+		commitHash = out[:strings.Index(out, "\n")]
+	}
 	cleanPath := path.Clean(relativePath)
 	if cleanPath == "." {
 		cleanPath = ""
 	}
-	obj := commit + ":" + cleanPath
+	obj := commitHash + ":" + cleanPath
 	pathSplits := strings.Split(cleanPath, "/")
 
 	var fileContent *sourceFileContent
@@ -204,10 +229,14 @@ func buildFileData(relativePath string, repo config.RepoConfig, commit string) (
 		if err != nil {
 			return nil, err
 		}
+		language := filenameToLangMap[filepath.Base(cleanPath)]
+		if language == "" {
+			language = extToLangMap[filepath.Ext(cleanPath)]
+		}
 		fileContent = &sourceFileContent{
 			Content:   content,
 			LineCount: strings.Count(string(content), "\n"),
-			Language:  extToLangMap[filepath.Ext(cleanPath)],
+			Language:  language,
 		}
 	}
 
@@ -225,6 +254,18 @@ func buildFileData(relativePath string, repo config.RepoConfig, commit string) (
 		externalDomain = url.Hostname()
 	}
 
+	permalink := ""
+	headlink := ""
+	if !strings.HasPrefix(commitHash, commit) {
+		permalink = "?commit=" + commitHash[:16]
+	} else {
+		if dirContent != nil {
+			headlink = "."
+		} else {
+			headlink = segments[len(segments)-1].Name
+		}
+	}
+
 	return &fileViewerContext{
 		PathSegments:   segments,
 		Repo:           repo,
@@ -232,5 +273,7 @@ func buildFileData(relativePath string, repo config.RepoConfig, commit string) (
 		DirContent:     dirContent,
 		FileContent:    fileContent,
 		ExternalDomain: externalDomain,
+		Permalink:      permalink,
+		Headlink:       headlink,
 	}, nil
 }

@@ -5,10 +5,19 @@ var Cookies = require('js-cookie');
 var Codesearch = require('codesearch/codesearch.js').Codesearch;
 var RepoSelector = require('codesearch/repo_selector.js');
 
+var KeyCodes = {
+  SLASH_OR_QUESTION_MARK: 191
+};
+
+function getSelectedText() {
+  return window.getSelection ? window.getSelection().toString() : null;
+}
+
 function init(initData) {
 "use strict";
 
 var h = new html.HTMLFactory();
+var last_url_update = 0;
 
 function vercmp(a, b) {
   var re = /^([0-9]*)([^0-9]*)(.*)$/;
@@ -252,10 +261,6 @@ var FileGroup = Backbone.Model.extend({
 
 /** A set of matches that are automatically grouped by path. */
 var SearchResultSet = Backbone.Collection.extend({
-  comparator: function(file_group) {
-    return file_group.id;
-  },
-
   add_match: function(match) {
     var path_info = match.path_info();
     var file_group = this.get(path_info.id);
@@ -495,6 +500,7 @@ var MatchesView = Backbone.View.extend({
   el: $('#results'),
   events: {
     'click .file-extension': '_limitExtension',
+    'keydown': '_handleKey',
   },
   initialize: function() {
     this.model.search_results.on('search-complete', this.render, this);
@@ -573,6 +579,27 @@ var MatchesView = Backbone.View.extend({
       q = 'file:' + ext + ' ' + q;
     CodesearchUI.input.val(q);
     CodesearchUI.newsearch();
+  },
+  _handleKey: function(e) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+      return;
+    var which = event.which;
+    if (which === KeyCodes.SLASH_OR_QUESTION_MARK) {
+      var t = getSelectedText();
+      if (!t)
+        return;
+      event.preventDefault();
+      if (CodesearchUI.input_regex.is(':checked'))
+        t = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // from mozilla docs
+
+      // Make sure that the search results the user is looking at, in
+      // which they've selected text, get persisted in their browser
+      // history so that they can come back to them.
+      last_url_update = 0;
+
+      CodesearchUI.input.val(t);
+      CodesearchUI.newsearch();
+    }
   }
 });
 
@@ -605,8 +632,25 @@ var ResultView = Backbone.View.extend({
     if (this.last_url !== url ) {
       if (history.pushState) {
         var browser_url = window.location.pathname + window.location.search;
-        if (browser_url !== url)
-          history.pushState(null, '', url);
+        if (browser_url !== url) {
+          // If the user is typing quickly, just keep replacing the
+          // current URL.  But after they've paused, enroll the URL they
+          // paused at into their browser history.
+          var now = Date.now();
+          var two_seconds = 2000;
+          if (this.last_url === null) {
+            // If this.last_url is null, that means this is the initial
+            // navigation. We should never pushState here, otherwise the
+            // user will need to backspace twice to go back to the
+            // previous page.
+            history.replaceState(null, '', url);
+          } else if (now - last_url_update > two_seconds) {
+            history.pushState(null, '', url);
+          } else {
+            history.replaceState(null, '', url);
+          }
+          last_url_update = now;
+        }
       }
       this.last_url = url;
     }
